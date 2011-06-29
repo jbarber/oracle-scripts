@@ -1,5 +1,103 @@
 #!/usr/bin/env perl
 
+=head1 NAME
+
+11g_change_sid.pl
+
+=head1 SYNOPSIS
+
+11g_change_sid.pl --newhostname foo.bar.com --oldsid OLDSID --newsid NEWSID --orahome /u01/path/to/db/home --gridhome /u01/path/to/grid/home [--help] [--man] [--list] [--skip SECTION]
+
+=head1 DESCRIPTION
+
+Changes system hostname and updates Oracle database SID for 11g.
+
+=head1 OPTIONS
+
+=over
+
+=item --newhostname foo.bar.com
+
+The new host name of the host,
+
+=item --oldsid OLDSID
+
+The current SID of the database that you want to change.
+
+=item --newsid NEWSID
+
+The target SID of the OLDSID database.
+
+=item --orahome $ORACLE_HOME
+
+The path to the Oracle home of the database whose SID you are changing.
+
+=item --gridhome $GRID_HOME
+
+The path to the Oracle Grid home (where Grid was installed).
+
+=item [--help]
+
+Report command line help.
+
+=item [--man]
+
+Show the manpage.
+
+=item [--skip]
+
+Go to a particular section of the program. Doing this may not work as some
+sections depend on previous sections having completed (e.g. the database being
+started). Sections are reported in the program output on standard error with
+the prefix "###", e.g.
+   ### CREATE_DEST
+
+You can also list all of the sections in the program by using the L</"--list"> argument.
+
+=item [--list]
+
+Show all of the sections in the program.
+
+=back
+
+=head1 REQUISITES
+
+=over
+
+=item * Valid for Oracle 11g B<ONLY>.
+
+=item * The hostname must B<NOT> have been changed, otherwise changing the CRS configuration will fail.
+
+=item * The script should be run by root.
+
+=item * CRS must be running
+
+=back
+
+=head1 RHEL RECOMMEND USAGE
+
+=over
+
+=item 1. Boot the machine into single user mode
+
+=item 2. Prevent future kudzu interuptions because of NIC MAC addresses "service kudzu start"
+
+=item 3. Configure network interfaces under /etc/sysconfig/network-scripts/ifcfg-eth*
+
+=item 4. Update /etc/hosts
+
+=item 5. Change to your normal runlevel: "telinit 3"
+
+=item 6. Run this script
+
+=back
+
+=head1 AUTHOR
+
+Jonathan Barber - <jonathan.barber@gmail.com>
+
+=cut
+
 use strict;
 use warnings;
 use Getopt::Long;
@@ -346,7 +444,9 @@ sub add_listener {
 	failed and giveup "Couldn't AUTO_START $lsnr", @out;
 }
 
-my ($oldhostname, $newhostname, $oldsid, $newsid, $noroot, $force, $help, $man, $skip, $list, $orahome, $gridhome);
+############################################################
+# Parse command line
+my ($oldhostname, $newhostname, $oldsid, $newsid, $noroot, $help, $man, $skip, $list, $orahome, $gridhome);
 GetOptions( 
 	"newhostname=s" => \$newhostname,
 	"oldsid=s"      => \$oldsid,
@@ -354,7 +454,6 @@ GetOptions(
 	"help"          => \$help,
 	"man"           => \$man,
 	"noroot"        => \$noroot,
-	"force"         => \$force,
 	"skip=s"        => \$skip,
 	"list"		=> \$list,
 	"orahome=s"     => \$orahome,
@@ -373,6 +472,7 @@ $orahome     || pod2usage "Missing --orahome option";
 $gridhome    || pod2usage "Missing --gridhome option";
 
 $ENV{PATH} .= ":$orahome/bin:$gridhome/bin";
+
 my @parts = (
 	[ \&check_hostname, "CHECK_HOSTNAME" ],
 	[ \&check_runlevel, "CHECK_RUNLEVEL" ],
@@ -411,7 +511,7 @@ my $seen;
 for my $part (@parts) {
 	my ($sub, $label, @args) = @{$part};
 	if ($skip and ! $seen) {
-		warn "### Skipping $label\n";
+		warn "## Skipping $label\n";
 		if ($skip eq $label) {
 			$seen = 1;
 		}
