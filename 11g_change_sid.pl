@@ -5,6 +5,8 @@ use warnings;
 use Getopt::Long;
 use Pod::Usage;
 use File::Temp;
+use File::Path qw(mkpath);
+use File::Copy qw(move);
 
 #$ENV{ORACLE_BASE} = "/u01/app";
 #$ENV{GRID_HOME} = $ENV{ORACLE_BASE}."/11.2.0/grid";
@@ -98,17 +100,17 @@ my @parts = (
 	[ \&config_resources, "CONFIG_RESOURCES", $gridhome ],
 	[ \&start_asm, "START_ASM", $orahome ],
 	[ \&online_diskgroups, "ONLINE_DISKGROUPS", $gridhome ],
-	# Create PFILE for new DBID while system is online?
-	# [ "CREATE_PFILE" ],
-	# [ "MODIFY_PFILE" ],
-	# [ "CREATE_DEST" ],
-	# [ \&change_dbid, "CHANGE_DBID" ],
-	# [ , "START_NEWDBID" ],
-	# [ , "MOVE_ORAPWD" ],
-	# [ , "CONFIG_LSNR" ],
-	[ \&add_db, "ADD_DB", $oldsid, $orahome ], # FIXME: Change $oldsid to $newsid
-	[ \&start_db, "START_DB", $oldsid, $orahome ], # FIXME: Change $oldsid to $newsid
-
+	[ \&add_db, "ADD_OLD_SID_TO_HAS", $oldsid, $orahome ],
+	[ \&start_db, "START_OLD_SID_DB", $oldsid, $orahome ],
+	[ \&create_pfile, "CREATE_PFILE", $oldsid, $newsid, $orahome ],
+	[ \&modify_pfile, "MODIFY_PFILE", $oldsid, $newsid, $orahome ],
+	[ \&change_dbid, "CHANGE_DBID", $oldsid, $newsid, $orahome ],
+	[ \&move_orapwd, "MOVE_ORAPWD", $oldsid, $newsid, $orahome ],
+	[ \&create_spfile, "CREATE_SPFILE", $newsid, $orahome ],
+	[ \&remove_db, "REMOVE_OLD_DB_FROM_HAS", $oldsid, $orahome ],
+	[ \&add_db, "ADD_NEW_SID_TO_HAS", $newsid, $orahome ],
+	[ \&start_db, "START_NEW_SID_DB", $newsid, $orahome ],
+	[ \&add_listener, "CONFIG_LSNR", $gridhome ],
 );
 
 if ($list) {
@@ -250,10 +252,9 @@ EOF
 	local $ENV{ORACLE_HOME} = $gridhome;
 	my @out = sqlplus "grid" => $fh->filename, "/ as sysasm";
 	failed and giveup "Couldn't bring diskgroups online", @out;
-	sleep 60;
 
 	# Autostart all of the diskgroups
-	my @out = sudo "grid" => "crsctl status resource -w 'TYPE = ora.diskgroup.type' | sed -n '/NAME/ { s/NAME=//; p }'";
+	@out = sudo "grid" => "crsctl status resource -w 'TYPE = ora.diskgroup.type' | sed -n '/NAME/ { s/NAME=//; p }'";
 	failed and giveup "Couldn't configure diskgroups to AUTO_START", @out;
 	chomp @out;
 
@@ -263,7 +264,96 @@ EOF
 	}
 }
 
-# TODO: Change NID...
+sub create_pfile {
+	my ($oldsid, $newsid, $orahome) = @_;
+
+	my $fh = make_script <<EOF;
+set serveroutput on
+DECLARE
+  spfile v\$parameter.value%type;
+BEGIN
+  select value into spfile from v\$parameter where name = 'spfile' and value is not null;
+  if spfile is not null then
+    execute immediate 'create pfile=''init$newsid.ora'' from spfile';
+  else 
+    dbms_output.put_line('No spfile');
+  end if;
+END;
+/
+exit;
+EOF
+
+	local $ENV{ORACLE_SID} = $oldsid;
+	local $ENV{ORACLE_HOME} = $orahome;
+	my @out = sqlplus "oracle" => $fh->filename;
+	failed and giveup "Couldn't create pfile", @out;
+
+	# Handle pfile
+	if (grep { /No spfile/ } @out) {
+		# Do this with sudo so the ownership is correct
+		my @out = sudo "oracle" => "cp $orahome/dbs/init$oldsid.ora $orahome/dbs/init$newsid.ora";
+		failed and giveup "Couldn't copy pfile", @out;
+	}
+}
+
+sub modify_pfile {
+	my ($oldsid, $newsid, $orahome) = @_;
+	my $newpfile = "$orahome/dbs/init$newsid.ora";
+	-e $newpfile or die "No pfile found at $newpfile for new SID\n";
+	my @ids = get_uid_gid("oracle");
+
+	my @out = run <<EOF;
+sed -i \\
+    -e "s/db_name=.$oldsid./db_name='$newsid'/" \\
+    -e "s/^$oldsid\./$newsid./" \\
+    -e "/dispatchers=/ { s/SERVICE=$oldsid/SERVICE=$newsid/ }" \\
+    -e "/\\(audit_file\\|\\(background\\|core\\|user\\)_dump\\)_dest=/ { s/$oldsid/$newsid/ }" \\
+    $newpfile
+EOF
+	failed and giveup "Couldn't modify the pfile with the new db_name or logging destinations", @out;
+
+	# Create the log directories
+	open my $fh, "<$newpfile" or die "Can't open $newpfile: $!\n";
+	while (my $line = <$fh>) {
+		next unless $line =~ /((background|core|user|)_dump|audit_file)_dest=/;
+		my (undef, $path) = split /=/, $line;
+		chomp $path;
+		$path =~ s/^["']//;
+		$path =~ s/["']$//;
+
+		if (-e $path)  { # Already exists
+			if (not -d $path) { # Not a directory
+				die "$path exists but is not a directory!\n";
+			}
+			else {
+				chown @ids, $path or die "Couldn't chown directory: $!\n";
+			}
+		}
+		else {
+			my @created = mkpath($path, 1, 0755) or die "Couldn't create directory $path: $!\n";
+			chown @ids, @created or die "Couldn't chown directory: $!\n";
+		}
+	}
+}
+
+sub change_dbid {
+	my ($oldsid, $newsid, $orahome) = @_;
+	my $fh = make_script <<'EOF';
+alter database open;
+alter system switch logfile;
+shutdown immediate;
+startup mount;
+exit;
+EOF
+
+	local $ENV{ORACLE_HOME} = $orahome;
+	local $ENV{ORACLE_SID} = $oldsid;
+	my @out = sqlplus "oracle" => $fh->filename;
+	failed and giveup "Couldn't start the database", @out;
+
+	@out = sudo "oracle" => "sh -c 'echo Y | nid target=/ setname=yes dbname=$newsid'";
+	failed and giveup "Couldn't change DBID with nid", @out;
+}
 
 sub add_db {
 	my ($sid, $orahome) = @_;
@@ -277,6 +367,28 @@ sub add_db {
 	failed and giveup "Couldn't configure ora.$sid.db", @out;
 }
 
+sub remove_db {
+	my ($sid, $orahome) = @_;
+
+	local $ENV{ORACLE_HOME} = $orahome;
+
+	my @out = sudo "oracle" => "srvctl remove database -d $sid -y";
+	failed and giveup "Couldn't remove DB $sid from HAS", @out;
+}
+
+sub move_orapwd {
+	my ($oldsid, $newsid, $orahome) = @_;
+	my $orig = "$orahome/dbs/orapw$oldsid";
+	my $dest = "$orahome/dbs/orapw$newsid";
+	if (-e $orig) {
+		move $orig, $dest or die "Can't move $orig to $dest: $!\n";
+	}
+	else {
+		my @out = sudo "oracle" => "orapwd file=$orahome/dbs/orapw$newsid password=manager entries=10";
+		failed and giveup "Couldn't create a new Oracle password file", @out;
+	}
+}
+
 sub start_db {
 	my ($sid, $orahome) = @_;
 
@@ -284,4 +396,32 @@ sub start_db {
 
 	my @out = sudo "oracle" => "srvctl start database -d $sid";
 	failed and giveup "Couldn't start DB", @out;
+}
+
+sub create_spfile {
+	my ($sid, $orahome) = @_;
+	my $fh = make_script <<'EOF';
+create spfile from pfile;
+exit;
+EOF
+
+	local $ENV{ORACLE_SID} = $sid;
+	local $ENV{ORACLE_HOME} = $orahome;
+	my @out = sqlplus "oracle" => $fh->filename;
+	failed and giveup "Couldn't start the database and create spfile", @out;
+}
+
+sub add_listener {
+	my ($orahome) = @_;
+	local $ENV{ORACLE_HOME} = $orahome;
+	my @out = sudo "grid" => "srvctl add listener";
+	failed and giveup "Couldn't add listener", @out;
+
+	@out = sudo "grid" => "srvctl start listener";
+	failed and giveup "Couldn't start listener", @out;
+
+	# FIXME: Assume listener name is fixed...
+	my $lsnr = "ora.LISTENER.lsnr";
+	@out = sudo "grid" => "crsctl modify resource $lsnr -attr AUTO_START=1";
+	failed and giveup "Couldn't AUTO_START $lsnr", @out;
 }
