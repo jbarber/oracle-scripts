@@ -252,9 +252,15 @@ EOF
 	failed and giveup "Couldn't bring diskgroups online", @out;
 	sleep 60;
 
-	# TODO: Find all of the diskgroups and make them auto_start
-	#sudo -u grid -E crsctl status resource -w "TYPE = ora.diskgroup.type"
-	#sudo -u grid -E crsctl modify resource ora.DG0.dg -attr AUTO_START=1
+	# Autostart all of the diskgroups
+	my @out = sudo "grid" => "crsctl status resource -w 'TYPE = ora.diskgroup.type' | sed -n '/NAME/ { s/NAME=//; p }'";
+	failed and giveup "Couldn't configure diskgroups to AUTO_START", @out;
+	chomp @out;
+
+	for my $diskgroup (@out) {
+		my @auto = sudo "grid" => "crsctl modify resource $diskgroup -attr AUTO_START=1";
+		failed and giveup "Couldn't configure diskgroup $diskgroup to AUTO_START", @auto;
+	}
 }
 
 # TODO: Change NID...
