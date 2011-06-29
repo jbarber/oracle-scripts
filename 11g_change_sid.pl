@@ -8,38 +8,8 @@ use File::Temp;
 use File::Path qw(mkpath);
 use File::Copy qw(move);
 
-#$ENV{ORACLE_BASE} = "/u01/app";
-#$ENV{GRID_HOME} = $ENV{ORACLE_BASE}."/11.2.0/grid";
-#$ENV{ORACLE_HOME} = $ENV{ORACLE_BASE}."/oracle/product/11.2.0/db_1";
-
-my ($oldhostname, $newhostname, $oldsid, $newsid, $noroot, $force, $help, $man, $skip, $list, $orahome, $gridhome);
-GetOptions( 
-	"newhostname=s" => \$newhostname,
-	"oldsid=s"      => \$oldsid,
-	"newsid=s"      => \$newsid,
-	"help"          => \$help,
-	"man"           => \$man,
-	"noroot"        => \$noroot,
-	"force"         => \$force,
-	"skip=s"        => \$skip,
-	"list"		=> \$list,
-	"orahome=s"     => \$orahome,
-	"gridhome=s"    => \$gridhome,
-) or pod2usage(-verbose => 0);
-
-$help        && pod2usage { -verbose => 0 };
-$man         && pod2usage { -verbose => 2 };
-$newhostname || pod2usage "Missing --newhostname option";
-$oldsid      || pod2usage "Missing --oldsid option";
-$newsid      || pod2usage "Missing --newsid option";
-$noroot      || am_i_root();
-$oldhostname = $ENV{HOSTNAME};
-$oldsid eq $newsid && die "--oldsid is the same as --newsid, nothing to do\n";
-$orahome     || pod2usage "Missing --orahome option";
-$gridhome    || pod2usage "Missing --gridhome option";
-
-$ENV{PATH} .= ":$orahome/bin:$gridhome/bin";
-
+############################################################
+# Utility functions
 sub run {
 	my ($cmd) = @_;
 	warn "Running: $cmd\n";
@@ -87,55 +57,8 @@ sub warn_section {
 	warn "### $mesg\n";
 }
 
-my @parts = (
-	[ \&check_hostname, "CHECK_HOSTNAME" ],
-	[ \&check_runlevel, "CHECK_RUNLEVEL" ],
-	[ \&check_db_exists, "CHECK_DB_EXISTS", $oldsid, $orahome ],
-	[ \&stop_db, "STOP_DB", $oldsid, $orahome ],
-	[ \&stop_asm, "STOP_ASM", $orahome ],
-	[ \&stop_has, "STOP_HAS" ],
-	[ \&deconfig_has, "DECONFIG_HAS", $gridhome ],
-	[ \&change_hostname, "CHANGE_HOSTNAME", $oldhostname, $newhostname ],
-	[ \&config_has, "CONFIG_HAS", $gridhome ],
-	[ \&config_resources, "CONFIG_RESOURCES", $gridhome ],
-	[ \&start_asm, "START_ASM", $orahome ],
-	[ \&online_diskgroups, "ONLINE_DISKGROUPS", $gridhome ],
-	[ \&add_db, "ADD_OLD_SID_TO_HAS", $oldsid, $orahome ],
-	[ \&start_db, "START_OLD_SID_DB", $oldsid, $orahome ],
-	[ \&create_pfile, "CREATE_PFILE", $oldsid, $newsid, $orahome ],
-	[ \&modify_pfile, "MODIFY_PFILE", $oldsid, $newsid, $orahome ],
-	[ \&change_dbid, "CHANGE_DBID", $oldsid, $newsid, $orahome ],
-	[ \&move_orapwd, "MOVE_ORAPWD", $oldsid, $newsid, $orahome ],
-	[ \&create_spfile, "CREATE_SPFILE", $newsid, $orahome ],
-	[ \&remove_db, "REMOVE_OLD_DB_FROM_HAS", $oldsid, $orahome ],
-	[ \&add_db, "ADD_NEW_SID_TO_HAS", $newsid, $orahome ],
-	[ \&start_db, "START_NEW_SID_DB", $newsid, $orahome ],
-	[ \&add_listener, "CONFIG_LSNR", $gridhome ],
-);
-
-if ($list) {
-	print "Sections:\n";
-	for my $part (@parts) {
-		print "  ", $part->[1], "\n";
-	}
-	exit;
-}
-
-my $seen;
-for my $part (@parts) {
-	my ($sub, $label, @args) = @{$part};
-	if ($skip and ! $seen) {
-		warn "### Skipping $label\n";
-		if ($skip eq $label) {
-			$seen = 1;
-		}
-		next;
-	}
-
-	warn_section $label;
-	$sub->( @args );
-}
-
+############################################################
+# Functions that change configuration
 sub check_hostname {
 	my ($out) = run "hostname";
 	chomp $out;
@@ -159,7 +82,7 @@ sub check_db_exists {
 }
 
 sub stop_db {
-	my ($orahome) = @_;
+	my ($oldsid, $orahome) = @_;
 	local $ENV{ORACLE_HOME} = $orahome;
 	my @out = sudo "oracle" => "srvctl stop database -d $oldsid";
 	# exit code 2 == DB stopped already
@@ -206,7 +129,6 @@ sub change_hostname {
 
 sub config_has {
 	my ($gridhome) = @_;
-	# FIXME: Is force required?
 	my @out = run "$gridhome/crs/install/roothas.pl";
 	failed and giveup "Couldn't configure HAS", @out;
 }
@@ -228,6 +150,7 @@ sub config_resources {
 }
 
 sub start_asm {
+	my ($gridhome) = @_;
 	local $ENV{ORACLE_HOME} = $gridhome;
 	
 	my @out = sudo "oracle" => 'srvctl start asm';
@@ -421,4 +344,80 @@ sub add_listener {
 	my $lsnr = "ora.LISTENER.lsnr";
 	@out = sudo "grid" => "crsctl modify resource $lsnr -attr AUTO_START=1";
 	failed and giveup "Couldn't AUTO_START $lsnr", @out;
+}
+
+my ($oldhostname, $newhostname, $oldsid, $newsid, $noroot, $force, $help, $man, $skip, $list, $orahome, $gridhome);
+GetOptions( 
+	"newhostname=s" => \$newhostname,
+	"oldsid=s"      => \$oldsid,
+	"newsid=s"      => \$newsid,
+	"help"          => \$help,
+	"man"           => \$man,
+	"noroot"        => \$noroot,
+	"force"         => \$force,
+	"skip=s"        => \$skip,
+	"list"		=> \$list,
+	"orahome=s"     => \$orahome,
+	"gridhome=s"    => \$gridhome,
+) or pod2usage(-verbose => 0);
+
+$help        && pod2usage { -verbose => 0 };
+$man         && pod2usage { -verbose => 2 };
+$newhostname || pod2usage "Missing --newhostname option";
+$oldsid      || pod2usage "Missing --oldsid option";
+$newsid      || pod2usage "Missing --newsid option";
+$noroot      || am_i_root();
+$oldhostname = $ENV{HOSTNAME};
+$oldsid eq $newsid && die "--oldsid is the same as --newsid, nothing to do\n";
+$orahome     || pod2usage "Missing --orahome option";
+$gridhome    || pod2usage "Missing --gridhome option";
+
+$ENV{PATH} .= ":$orahome/bin:$gridhome/bin";
+my @parts = (
+	[ \&check_hostname, "CHECK_HOSTNAME" ],
+	[ \&check_runlevel, "CHECK_RUNLEVEL" ],
+	[ \&check_db_exists, "CHECK_DB_EXISTS", $oldsid, $orahome ],
+	[ \&stop_db, "STOP_DB", $oldsid, $orahome ],
+	[ \&stop_asm, "STOP_ASM", $orahome ],
+	[ \&stop_has, "STOP_HAS" ],
+	[ \&deconfig_has, "DECONFIG_HAS", $gridhome ],
+	[ \&change_hostname, "CHANGE_HOSTNAME", $oldhostname, $newhostname ],
+	[ \&config_has, "CONFIG_HAS", $gridhome ],
+	[ \&config_resources, "CONFIG_RESOURCES", $gridhome ],
+	[ \&start_asm, "START_ASM", $orahome ],
+	[ \&online_diskgroups, "ONLINE_DISKGROUPS", $gridhome ],
+	[ \&add_db, "ADD_OLD_SID_TO_HAS", $oldsid, $orahome ],
+	[ \&start_db, "START_OLD_SID_DB", $oldsid, $orahome ],
+	[ \&create_pfile, "CREATE_PFILE", $oldsid, $newsid, $orahome ],
+	[ \&modify_pfile, "MODIFY_PFILE", $oldsid, $newsid, $orahome ],
+	[ \&change_dbid, "CHANGE_DBID", $oldsid, $newsid, $orahome ],
+	[ \&move_orapwd, "MOVE_ORAPWD", $oldsid, $newsid, $orahome ],
+	[ \&create_spfile, "CREATE_SPFILE", $newsid, $orahome ],
+	[ \&remove_db, "REMOVE_OLD_DB_FROM_HAS", $oldsid, $orahome ],
+	[ \&add_db, "ADD_NEW_SID_TO_HAS", $newsid, $orahome ],
+	[ \&start_db, "START_NEW_SID_DB", $newsid, $orahome ],
+	[ \&add_listener, "CONFIG_LSNR", $gridhome ],
+);
+
+if ($list) {
+	print "Sections:\n";
+	for my $part (@parts) {
+		print "  ", $part->[1], "\n";
+	}
+	exit;
+}
+
+my $seen;
+for my $part (@parts) {
+	my ($sub, $label, @args) = @{$part};
+	if ($skip and ! $seen) {
+		warn "### Skipping $label\n";
+		if ($skip eq $label) {
+			$seen = 1;
+		}
+		next;
+	}
+
+	warn_section $label;
+	$sub->( @args );
 }
