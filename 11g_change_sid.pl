@@ -209,9 +209,6 @@ sub config_has {
 	# FIXME: Is force required?
 	my @out = run "$gridhome/crs/install/roothas.pl";
 	failed and giveup "Couldn't configure HAS", @out;
-
-	@out = run 'echo -e "/^h1:.*ohasd/ m /^l2/\nwq" | ed /etc/inittab';
-	failed and giveup "modification of inittab failed", @out;
 }
 
 sub config_resources {
