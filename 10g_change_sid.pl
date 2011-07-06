@@ -132,7 +132,7 @@ sub failed { $? ? 1 : 0 }
 
 sub sudo {
 	my ($user, $cmd) = @_;
-	run qq(sudo -u $user $cmd);
+	run qq(sudo -u $user -E $cmd);
 }
 
 sub am_i_root {
