@@ -118,7 +118,7 @@ sub failed { $? ? 1 : 0 }
 
 sub sudo {
 	my ($user, $cmd) = @_;
-	run qq(sudo -u $user -E $cmd);
+	run qq(sudo -u $user $::SUDO_HAS_E $cmd);
 }
 
 sub am_i_root {
@@ -153,6 +153,18 @@ sub get_uid_gid {
 sub warn_section {
 	my ($mesg) = @_;
 	warn "### $mesg\n";
+}
+
+sub check_sudo {
+	my ($out) = run "sudo -E true";
+	if (failed) {
+		warn "sudo doesn't support -E argument, not using it\n";
+		$::SUDO_HAS_E = "";
+	}
+	else {
+		warn "sudo supports -E argument\n";
+		$::SUDO_HAS_E = "-E";
+	}
 }
 
 ############################################################
@@ -506,6 +518,10 @@ if ($list) {
 	}
 	exit;
 }
+
+# This really has to be run, otherwise sudo might be called with the wrong
+# arguments
+check_sudo();
 
 my $seen;
 for my $part (@parts) {
