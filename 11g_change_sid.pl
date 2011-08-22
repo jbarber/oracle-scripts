@@ -285,6 +285,7 @@ EOF
 
 	# Autostart all of the diskgroups
 	@out = sudo "grid" => "crsctl status resource -w 'TYPE = ora.diskgroup.type' | sed -n '/NAME/ { s/NAME=//; p }'";
+
 	failed and giveup "Couldn't configure diskgroups to AUTO_START", @out;
 	chomp @out;
 
@@ -483,6 +484,9 @@ $oldsid eq $newsid && die "--oldsid is the same as --newsid, nothing to do\n";
 $orahome     || pod2usage "Missing --orahome option";
 $gridhome    || pod2usage "Missing --gridhome option";
 
+# $ENV{ORACLE_HOME} is sensitive to the trailing slash...
+$orahome =~ s#/$##;
+$gridhome =~ s#/$##;
 $ENV{PATH} .= ":$orahome/bin:$gridhome/bin";
 
 my @parts = (
