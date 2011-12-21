@@ -484,6 +484,8 @@ $oldsid eq $newsid && die "--oldsid is the same as --newsid, nothing to do\n";
 $orahome     || pod2usage "Missing --orahome option";
 $gridhome    || pod2usage "Missing --gridhome option";
 
+length $newsid > 8 && die "--newsid has to be 8 characters or less in length\n";
+
 # $ENV{ORACLE_HOME} is sensitive to the trailing slash...
 $orahome =~ s#/$##;
 $gridhome =~ s#/$##;

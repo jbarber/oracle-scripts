@@ -113,6 +113,8 @@ $noroot      || am_i_root();
 $oldhostname = $ENV{HOSTNAME};
 $oldsid eq $newsid && die "--oldsid is the same as --newsid, nothing to do\n";
 
+length $newsid > 8 && die "--newsid has to be 8 characters or less in length\n";
+
 # Change with local when required
 my $orahome = $ENV{ORACLE_HOME} = get_orahome($oldsid);
 # UID/GID for chown'ing oracle
